@@ -20,6 +20,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## FOCURA workspace
+
+After signing in, use `/navigation` for a dedicated page linking to the dashboard, focus timer, study sessions, materials, analytics, and study circle. The dashboard folder cards use the supplied glossy golden folder artwork.
+
+Friend invitations can be copied as signup links and opened by another person. Friend profiles and study data are currently stored in browser local storage, so invitations do not yet synchronize accepted friendships or scores between accounts. Shared friend data requires configuring a real authentication and database backend.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

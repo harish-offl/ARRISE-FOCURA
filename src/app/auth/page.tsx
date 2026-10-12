@@ -23,12 +23,26 @@ export default function AuthPage() {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [invitedBy, setInvitedBy] = useState("");
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
       router.replace("/dashboard");
     }
   }, [isAuthenticated, isLoading, router]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      if (!params.has("invite")) return;
+
+      setInvitedBy(params.get("from")?.trim() || "a FOCURA student");
+      setEmail(params.get("email")?.trim() || "");
+      setMode("signup");
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, []);
 
   const passwordStrength = useMemo(() => {
     if (!password) return { label: "No password", color: "bg-[var(--border)]" };
@@ -165,6 +179,12 @@ export default function AuthPage() {
               Sign up
             </button>
           </div>
+
+          {invitedBy ? (
+            <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              You were invited to FOCURA by <span className="font-semibold">{invitedBy}</span>. Create an account to get started.
+            </div>
+          ) : null}
 
           {mode === "reset" ? (
             <form className="mt-8 space-y-4" onSubmit={handleReset}>
