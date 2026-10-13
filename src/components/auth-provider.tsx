@@ -1,60 +1,105 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 
-import {
-  clearAuthCookie,
-  clearStoredSession,
-  getStoredSession,
-  saveStoredSession,
-  setAuthCookie,
-  type AuthSession,
-  type AuthUser,
-} from "@/lib/auth-session";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import type { AuthUser } from "@/lib/auth-session";
 
-const AuthContext = createContext<{
+type AuthContextValue = {
   user: AuthUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (user: AuthUser, rememberMe?: boolean) => void;
-  logout: () => void;
-} | null>(null);
+  isSupabaseConfigured: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  signUp: (name: string, email: string, password: string, inviteToken?: string) => Promise<boolean>;
+  resetPassword: (email: string) => Promise<void>;
+  logout: () => Promise<void>;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+function mapUser(user: User): AuthUser {
+  return {
+    id: user.id,
+    email: user.email ?? "",
+    name: typeof user.user_metadata.full_name === "string"
+      ? user.user_metadata.full_name
+      : user.email?.split("@")[0] ?? "Student",
+    createdAt: user.created_at,
+  };
+}
+
+function requireSupabase() {
+  if (!supabase) throw new Error("Supabase is not configured. Add the project URL and anon key to the environment.");
+  return supabase;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<AuthSession | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isLoading, setIsLoading] = useState(isSupabaseConfigured);
 
   useEffect(() => {
-    const current = getStoredSession();
-    setSession(current);
-    setIsLoading(false);
+    if (!supabase) return;
+
+    let mounted = true;
+    const client = supabase;
+    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
+      if (mounted) setUser(session?.user ? mapUser(session.user) : null);
+    });
+
+    void client.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) {
+        console.error("Unable to restore the Supabase session.", error);
+        setUser(null);
+      } else {
+        setUser(data.session?.user ? mapUser(data.session.user) : null);
+      }
+      setIsLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
-  const value = useMemo(
-    () => ({
-      user: session?.user ?? null,
-      isAuthenticated: Boolean(session?.isAuthenticated),
-      isLoading,
-      login: (user: AuthUser, rememberMe = false) => {
-        const nextSession: AuthSession = {
-          user,
-          isAuthenticated: true,
-          rememberMe,
-          expiresAt: Date.now() + (rememberMe ? 1000 * 60 * 60 * 24 * 30 : 1000 * 60 * 60 * 12),
-        };
-
-        setSession(nextSession);
-        saveStoredSession(nextSession);
-        setAuthCookie(nextSession);
-      },
-      logout: () => {
-        setSession(null);
-        clearStoredSession();
-        clearAuthCookie();
-      },
-    }),
-    [isLoading, session],
-  );
+  const value = useMemo<AuthContextValue>(() => ({
+    user,
+    isAuthenticated: user !== null,
+    isLoading,
+    isSupabaseConfigured,
+    login: async (email, password) => {
+      const { error } = await requireSupabase().auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    },
+    signUp: async (name, email, password, inviteToken) => {
+      const { data, error } = await requireSupabase().auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: name,
+            ...(inviteToken ? { friend_invite_token: inviteToken } : {}),
+          },
+          emailRedirectTo: `${window.location.origin}/auth`,
+        },
+      });
+      if (error) throw error;
+      return data.session !== null;
+    },
+    resetPassword: async (email) => {
+      const { error } = await requireSupabase().auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth?mode=reset`,
+      });
+      if (error) throw error;
+    },
+    logout: async () => {
+      const { error } = await requireSupabase().auth.signOut();
+      if (error) throw error;
+    },
+  }), [isLoading, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

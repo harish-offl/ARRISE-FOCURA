@@ -1,65 +1,32 @@
-const DATABASE_NAME = "focura-material-files";
-const STORE_NAME = "files";
+import { supabase } from "@/lib/supabase";
 
-type StoredMaterialFile = {
-  id: string;
-  file: Blob;
-};
+const BUCKET = "study-materials";
 
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, 1);
+function requireSupabase() {
+  if (!supabase) throw new Error("Supabase is not configured for study material storage.");
+  return supabase;
+}
 
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore(STORE_NAME, { keyPath: "id" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("Unable to open the material file database."));
+export async function saveMaterialFile(userId: string, file: File): Promise<string> {
+  const client = requireSupabase();
+  const safeName = file.name.replace(/[^\w.-]+/g, "_");
+  const path = `${userId}/${crypto.randomUUID()}-${safeName}`;
+  const { error } = await client.storage.from(BUCKET).upload(path, file, {
+    contentType: file.type || "application/octet-stream",
+    upsert: false,
   });
+
+  if (error) throw error;
+  return path;
 }
 
-export async function saveMaterialFile(id: string, file: File): Promise<void> {
-  const database = await openDatabase();
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, "readwrite");
-      transaction.objectStore(STORE_NAME).put({ id, file } satisfies StoredMaterialFile);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error("Unable to save the material file."));
-      transaction.onabort = () => reject(transaction.error ?? new Error("Saving the material file was cancelled."));
-    });
-  } finally {
-    database.close();
-  }
+export async function loadMaterialFile(path: string): Promise<Blob> {
+  const { data, error } = await requireSupabase().storage.from(BUCKET).download(path);
+  if (error) throw error;
+  return data;
 }
 
-export async function getMaterialFile(id: string): Promise<Blob | null> {
-  const database = await openDatabase();
-
-  try {
-    return await new Promise<Blob | null>((resolve, reject) => {
-      const request = database.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(id);
-      request.onsuccess = () => resolve((request.result as StoredMaterialFile | undefined)?.file ?? null);
-      request.onerror = () => reject(request.error ?? new Error("Unable to read the material file."));
-    });
-  } finally {
-    database.close();
-  }
-}
-
-export async function removeMaterialFile(id: string): Promise<void> {
-  const database = await openDatabase();
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, "readwrite");
-      transaction.objectStore(STORE_NAME).delete(id);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error("Unable to delete the material file."));
-      transaction.onabort = () => reject(transaction.error ?? new Error("Deleting the material file was cancelled."));
-    });
-  } finally {
-    database.close();
-  }
+export async function removeMaterialFile(path: string): Promise<void> {
+  const { error } = await requireSupabase().storage.from(BUCKET).remove([path]);
+  if (error) throw error;
 }

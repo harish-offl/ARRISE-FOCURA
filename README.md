@@ -24,7 +24,17 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 After signing in, use `/navigation` for a dedicated page linking to the dashboard, focus timer, study sessions, materials, analytics, and study circle. The dashboard folder cards use the supplied glossy golden folder artwork.
 
-Friend invitations can be copied as signup links and opened by another person. Friend profiles and study data are currently stored in browser local storage, so invitations do not yet synchronize accepted friendships or scores between accounts. Shared friend data requires configuring a real authentication and database backend.
+## Supabase setup
+
+FOCURA uses Supabase Auth, Postgres, Realtime, and private Storage for accounts and study data. Without a configured Supabase project, sign-in and data changes are intentionally disabled instead of being saved as pretend accounts in the browser.
+
+1. Create a Supabase project.
+2. In the Supabase SQL editor, run [`supabase/schema.sql`](./supabase/schema.sql).
+3. Copy `.env.example` to `.env.local` and add the project URL and anon/public key from **Project Settings → API**. Do not put a service-role key in a browser-exposed variable.
+4. In **Authentication → URL Configuration**, allow your local app URL (`http://localhost:45879`) and the deployed site URL.
+5. Restart the Next.js server so it reads the environment variables.
+
+Dashboard plans, folders, material links, timer history, and theme preferences are stored per account in Postgres and streamed to other signed-in devices. Uploaded study files use the private `study-materials` Storage bucket. Friend invitations are stored in Postgres and update in real time; acceptance is tied to the invited email and invite token.
 
 ## Learn More
 

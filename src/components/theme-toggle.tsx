@@ -1,13 +1,16 @@
 "use client";
 
-import { Moon, Sparkles } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useTheme } from "@/components/theme-provider";
 
-export function ThemeToggle({ isDark, onToggle }: { isDark: boolean; onToggle: () => void }) {
+export function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+
   return (
-    <Button variant="ghost" size="icon" onClick={onToggle} aria-label="Toggle theme">
-      {isDark ? <Sparkles size={18} className="text-[var(--text-primary)]" /> : <Moon size={18} />}
+    <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="Toggle theme">
+      {theme === "dark" ? <Sun size={18} className="text-[var(--brand-primary)]" /> : <Moon size={18} />}
     </Button>
   );
 }

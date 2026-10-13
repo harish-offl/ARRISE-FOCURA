@@ -4,22 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AlarmClockCheck, Pause, Play, RotateCcw, SkipForward, Volume2, VolumeX } from "lucide-react";
 
 import { formatTime } from "@/lib/auth-session";
-import { readJson, STORAGE_KEYS, writeJson } from "@/lib/storage";
+import { useAuth } from "@/components/auth-provider";
+import { loadFocusMode, saveFocusMode, subscribeFocusMode } from "@/lib/focura-data";
+import type { FocusModeState } from "@/lib/focura-types";
 
-const STORAGE_KEY = "focura-focus-state";
-
-type FocusState = {
-  selectedMinutes: number;
-  remainingSeconds: number;
-  isRunning: boolean;
-  isCompleted: boolean;
-  endTime: number | null;
-  startedAt: number | null;
-  taskTitle: string;
-  goal: string;
-};
-
-const defaultState: FocusState = {
+const defaultState: FocusModeState = {
   selectedMinutes: 25,
   remainingSeconds: 25 * 60,
   isRunning: false,
@@ -31,17 +20,71 @@ const defaultState: FocusState = {
 };
 
 export function FocusMode() {
-  const [state, setState] = useState<FocusState>(() => readJson<FocusState>(STORAGE_KEY, defaultState));
+  const { user } = useAuth();
+  const [state, setState] = useState<FocusModeState>(defaultState);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [dataError, setDataError] = useState("");
   const [isMuted, setIsMuted] = useState(false);
   const [showExit, setShowExit] = useState(false);
   const intervalRef = useRef<number | null>(null);
+  const latestState = useRef(state);
+  const skipRemoteSave = useRef(false);
 
   useEffect(() => {
-    writeJson(STORAGE_KEY, state);
+    latestState.current = state;
   }, [state]);
 
   useEffect(() => {
-    if (!state.isRunning || state.isCompleted || !state.endTime) {
+    if (!user) return;
+    let active = true;
+    let unsubscribe = () => {};
+
+    void loadFocusMode(user.id).then((remoteState) => {
+      if (!active) return;
+      skipRemoteSave.current = true;
+      if (remoteState) setState(remoteState);
+      setIsLoaded(true);
+      setDataError("");
+      unsubscribe = subscribeFocusMode(user.id, (nextState) => {
+        if (!active || !nextState) return;
+        skipRemoteSave.current = true;
+        setState(nextState);
+      });
+    }).catch((error: unknown) => {
+      console.error("Unable to load the FOCURA focus timer.", error);
+      if (active) {
+        setDataError("Your focus timer could not be loaded from your account.");
+        setIsLoaded(true);
+      }
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !isLoaded) return;
+    if (skipRemoteSave.current) {
+      skipRemoteSave.current = false;
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void saveFocusMode(user.id, latestState.current)
+        .then(() => setDataError(""))
+        .catch((error: unknown) => {
+          console.error("Unable to sync the FOCURA focus timer.", error);
+          setDataError("Your focus timer could not be synced. Check your connection and retry.");
+        });
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isLoaded, state.endTime, state.isCompleted, state.isRunning, state.selectedMinutes, state.startedAt, state.taskTitle, state.goal, user]);
+
+  useEffect(() => {
+    if (!isLoaded || !state.isRunning || state.isCompleted || !state.endTime) {
       if (intervalRef.current) {
         window.clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -75,7 +118,7 @@ export function FocusMode() {
         intervalRef.current = null;
       }
     };
-  }, [state.endTime, state.isCompleted, state.isRunning, state]);
+  }, [isLoaded, state.endTime, state.isCompleted, state.isRunning]);
 
   const displayTime = useMemo(() => formatTime(state.remainingSeconds), [state.remainingSeconds]);
 
@@ -145,9 +188,18 @@ export function FocusMode() {
     }));
   };
 
+  if (!isLoaded) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[var(--background)] text-sm text-[var(--text-secondary)]">
+        Loading your focus timer...
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[var(--background)] p-4 text-[var(--text-primary)] sm:p-6">
       <div className="mx-auto max-w-5xl rounded-[32px] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[var(--shadow)] sm:p-8">
+        {dataError ? <div role="alert" className="mb-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{dataError}</div> : null}
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-secondary)]">Focus mode</p>

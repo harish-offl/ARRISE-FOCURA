@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 
 export default function AuthPage() {
   const router = useRouter();
-  const { isAuthenticated, login, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, isSupabaseConfigured, login, signUp, resetPassword } = useAuth();
 
   const [mode, setMode] = useState<"login" | "signup" | "reset">("login");
   const [name, setName] = useState("");
@@ -19,11 +19,12 @@ export default function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
+  const [successNotice, setSuccessNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [invitedBy, setInvitedBy] = useState("");
+  const [inviteToken, setInviteToken] = useState("");
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
@@ -38,6 +39,7 @@ export default function AuthPage() {
 
       setInvitedBy(params.get("from")?.trim() || "a FOCURA student");
       setEmail(params.get("email")?.trim() || "");
+      setInviteToken(params.get("invite")?.trim() || "");
       setMode("signup");
     }, 0);
 
@@ -53,9 +55,10 @@ export default function AuthPage() {
 
   const validateEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError("");
+    setSuccessNotice("");
 
     if (!email.trim() || !password.trim()) {
       setError("Email and password are required.");
@@ -83,22 +86,24 @@ export default function AuthPage() {
     }
 
     setIsSubmitting(true);
-
-    setTimeout(() => {
-      const user = {
-        id: crypto.randomUUID(),
-        email: email.trim(),
-        name: name.trim() || email.split("@")[0],
-        createdAt: new Date().toISOString(),
-      };
-
-      login(user, rememberMe);
-      router.replace("/dashboard");
+    try {
+      if (mode === "signup") {
+        const authenticated = await signUp(name.trim(), email.trim(), password, inviteToken || undefined);
+        if (authenticated) router.replace("/dashboard");
+        else setSuccessNotice("Check your email to confirm your account, then sign in.");
+      } else {
+        await login(email.trim(), password);
+        router.replace("/dashboard");
+      }
+    } catch (submitError) {
+      console.error("FOCURA authentication failed.", submitError);
+      setError(submitError instanceof Error ? submitError.message : "Authentication failed. Please try again.");
+    } finally {
       setIsSubmitting(false);
-    }, 600);
+    }
   };
 
-  const handleReset = (event: React.FormEvent) => {
+  const handleReset = async (event: React.FormEvent) => {
     event.preventDefault();
     setError("");
 
@@ -108,10 +113,15 @@ export default function AuthPage() {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
+      await resetPassword(email.trim());
       setResetSent(true);
+    } catch (resetError) {
+      console.error("FOCURA password reset request failed.", resetError);
+      setError(resetError instanceof Error ? resetError.message : "Could not request a password reset.");
+    } finally {
       setIsSubmitting(false);
-    }, 500);
+    }
   };
 
   if (isLoading || isAuthenticated) {
@@ -183,6 +193,18 @@ export default function AuthPage() {
           {invitedBy ? (
             <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               You were invited to FOCURA by <span className="font-semibold">{invitedBy}</span>. Create an account to get started.
+            </div>
+          ) : null}
+
+          {!isSupabaseConfigured ? (
+            <div role="alert" className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              Account access is unavailable until Supabase is configured. Add <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to the app environment.
+            </div>
+          ) : null}
+
+          {successNotice ? (
+            <div role="status" className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+              {successNotice}
             </div>
           ) : null}
 
@@ -299,10 +321,7 @@ export default function AuthPage() {
 
               {mode === "login" ? (
                 <div className="flex items-center justify-between text-sm text-[var(--text-secondary)]">
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" className="accent-[var(--brand-primary)]" checked={rememberMe} onChange={() => setRememberMe((value) => !value)} />
-                    Remember me
-                  </label>
+                  <span>Secure Supabase account</span>
                   <button type="button" onClick={() => setMode("reset")} className="text-[var(--brand-primary)] hover:underline">
                     Forgot password?
                   </button>
@@ -315,7 +334,7 @@ export default function AuthPage() {
 
               {error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div> : null}
 
-              <Button type="submit" className="mt-2 w-full gap-2" disabled={isSubmitting}>
+              <Button type="submit" className="mt-2 w-full gap-2" disabled={isSubmitting || !isSupabaseConfigured}>
                 {isSubmitting ? (mode === "login" ? "Signing in..." : mode === "signup" ? "Creating account..." : "Sending...") : mode === "login" ? "Log in to FOCURA" : mode === "signup" ? "Create account" : "Send reset link"}
                 {!isSubmitting ? <ArrowRight size={16} /> : null}
               </Button>

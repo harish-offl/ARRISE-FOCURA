@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -23,7 +23,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
-  Sparkles,
+  Sun,
   Target,
   Trash2,
   Trophy,
@@ -35,72 +35,15 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis } fro
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
-import { getMaterialFile, removeMaterialFile, saveMaterialFile } from "@/lib/material-files";
-
-type StudySession = {
-  id: number;
-  title: string;
-  minutes: number;
-  status: "Planned" | "Completed";
-  createdAt?: string;
-  completedAt?: string;
-};
-
-type FocusRecord = {
-  id: number;
-  minutes: number;
-  completedAt: string;
-};
-
-type ExamScore = {
-  id: number;
-  exam: string;
-  score: number;
-  outOf: number;
-  date: string;
-};
-
-type StudyMaterial = {
-  id: number;
-  title: string;
-  url: string;
-};
-
-type MaterialFolder = {
-  id: string;
-  name: string;
-  color: string;
-};
-
-type LibraryMaterial = {
-  id: number;
-  folderId: string;
-  title: string;
-  kind: "link" | "file";
-  url?: string;
-  fileName?: string;
-  fileType?: string;
-  addedAt: string;
-};
-
-type FriendProfile = {
-  id: number;
-  name: string;
-  email: string;
-  scores: ExamScore[];
-  materials: StudyMaterial[];
-};
-
-const DEFAULT_MATERIAL_FOLDERS: MaterialFolder[] = [
-  { id: "lecture-notes", name: "Lecture notes", color: "#ff1717" },
-  { id: "assignments", name: "Assignments", color: "#5ca5dc" },
-  { id: "exam-prep", name: "Exam preparation", color: "#e3a16b" },
-];
+import { loadMaterialFile, removeMaterialFile, saveMaterialFile } from "@/lib/material-files";
+import { createFriendInvite, EMPTY_DASHBOARD, loadDashboard, loadFriendInvites, saveDashboard, subscribeDashboard, subscribeFriendInvites } from "@/lib/focura-data";
+import { useTheme } from "@/components/theme-provider";
+import type { FocusRecord, FriendInvite, LibraryMaterial, MaterialFolder, StudySession } from "@/lib/focura-types";
 
 export default function FocuraApp() {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const router = useRouter();
-  const [isDark, setIsDark] = useState(false);
   const [selectedMinutes, setSelectedMinutes] = useState(25);
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [isRunning, setIsRunning] = useState(false);
@@ -108,39 +51,31 @@ export default function FocuraApp() {
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [focusRecords, setFocusRecords] = useState<FocusRecord[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
-  const [friends, setFriends] = useState<FriendProfile[]>([]);
-  const [folders, setFolders] = useState<MaterialFolder[]>(DEFAULT_MATERIAL_FOLDERS);
+  const [friendInvites, setFriendInvites] = useState<FriendInvite[]>([]);
+  const [folders, setFolders] = useState<MaterialFolder[]>([]);
   const [libraryMaterials, setLibraryMaterials] = useState<LibraryMaterial[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [loadedDataKey, setLoadedDataKey] = useState<string | null>(null);
   const [storageError, setStorageError] = useState("");
   const [materialError, setMaterialError] = useState("");
-  const [scoreError, setScoreError] = useState("");
   const [showSessionModal, setShowSessionModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const [showFriendModal, setShowFriendModal] = useState(false);
-  const [selectedFriend, setSelectedFriend] = useState<FriendProfile | null>(null);
   const [sessionDraft, setSessionDraft] = useState("");
   const [sessionMinutes, setSessionMinutes] = useState(25);
   const [editingSessionId, setEditingSessionId] = useState<number | null>(null);
-  const [friendName, setFriendName] = useState("");
   const [friendEmail, setFriendEmail] = useState("");
   const [inviteLink, setInviteLink] = useState("");
   const [inviteError, setInviteError] = useState("");
   const [inviteNotice, setInviteNotice] = useState("");
-  const [examName, setExamName] = useState("");
-  const [examScore, setExamScore] = useState("");
-  const [examOutOf, setExamOutOf] = useState("100");
-  const [materialTitle, setMaterialTitle] = useState("");
-  const [materialUrl, setMaterialUrl] = useState("");
+  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
   const [folderNameDraft, setFolderNameDraft] = useState("");
   const [libraryTitleDraft, setLibraryTitleDraft] = useState("");
   const [libraryUrlDraft, setLibraryUrlDraft] = useState("");
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [showLibraryMaterialModal, setShowLibraryMaterialModal] = useState(false);
   const [materialSearch, setMaterialSearch] = useState("");
-
-  const savedDataKey = `focura-dashboard:${user?.id ?? "guest"}`;
+  const skipRemoteSave = useRef(false);
+  const accountId = user?.id ?? null;
 
   const focusScore = useMemo(() => {
     if (focusRecords.length === 0) return 0;
@@ -220,55 +155,81 @@ export default function FocuraApp() {
   );
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      try {
-        const savedTheme = window.localStorage.getItem("focura-theme");
-        setIsDark(savedTheme === "dark");
-        const storedData = window.localStorage.getItem(savedDataKey);
-        if (storedData) {
-          const parsedData = JSON.parse(storedData) as {
-            sessions?: StudySession[];
-            friends?: FriendProfile[];
-            folders?: MaterialFolder[];
-            libraryMaterials?: LibraryMaterial[];
-            focusRecords?: FocusRecord[];
-          };
-          setSessions(parsedData.sessions ?? []);
-          setFriends(parsedData.friends ?? []);
-          setFolders(parsedData.folders?.length ? parsedData.folders : DEFAULT_MATERIAL_FOLDERS);
-          setLibraryMaterials(parsedData.libraryMaterials ?? []);
-          setFocusRecords(parsedData.focusRecords ?? []);
-        } else {
-          setSessions([]);
-          setFriends([]);
-          setFolders(DEFAULT_MATERIAL_FOLDERS);
-          setLibraryMaterials([]);
-          setFocusRecords([]);
-        }
-        setStorageError("");
-      } catch (error) {
-        console.error("Unable to load saved FOCURA dashboard data.", error);
-        setStorageError("Saved plans and study-circle data could not be loaded from this browser.");
-      } finally {
-        setLoadedDataKey(savedDataKey);
-      }
-    }, 0);
+    if (!accountId || !user?.email) return;
 
-    return () => window.clearTimeout(timeoutId);
-  }, [savedDataKey]);
+    let active = true;
+    let unsubscribeDashboard = () => {};
+    let unsubscribeInvites = () => {};
+
+    void (async () => {
+      try {
+        const snapshot = await loadDashboard(accountId);
+        if (!active) return;
+
+        skipRemoteSave.current = true;
+        setSessions(snapshot.sessions);
+        setFolders(snapshot.folders);
+        setLibraryMaterials(snapshot.libraryMaterials);
+        setFocusRecords(snapshot.focusRecords);
+        if (snapshot.isDark !== undefined && snapshot.isDark !== (theme === "dark")) {
+          setTheme(snapshot.isDark ? "dark" : "light");
+        }
+        setLoadedDataKey(accountId);
+        setStorageError("");
+        unsubscribeDashboard = subscribeDashboard(accountId, (nextSnapshot) => {
+          if (!active) return;
+          skipRemoteSave.current = true;
+          setSessions(nextSnapshot.sessions);
+          setFolders(nextSnapshot.folders);
+          setLibraryMaterials(nextSnapshot.libraryMaterials);
+          setFocusRecords(nextSnapshot.focusRecords);
+          if (nextSnapshot.isDark !== undefined && nextSnapshot.isDark !== (theme === "dark")) {
+            setTheme(nextSnapshot.isDark ? "dark" : "light");
+          }
+        });
+
+        const refreshInvites = async () => {
+          try {
+            const invites = await loadFriendInvites(accountId, user.email);
+            if (active) setFriendInvites(invites);
+          } catch (error) {
+            console.error("Unable to load FOCURA friend invitations.", error);
+            if (active) setStorageError("Friend invitations could not be loaded. Refresh the page to retry.");
+          }
+        };
+        await refreshInvites();
+        if (active) unsubscribeInvites = subscribeFriendInvites(accountId, () => void refreshInvites());
+      } catch (error) {
+        console.error("Unable to load FOCURA account data.", error);
+        if (active) setStorageError("Your account data could not be loaded from Supabase. Check the database setup and try again.");
+      }
+    })();
+
+    return () => {
+      active = false;
+      unsubscribeDashboard();
+      unsubscribeInvites();
+    };
+  }, [accountId, user?.email]);
 
   useEffect(() => {
-    if (loadedDataKey !== savedDataKey) return;
-
-    try {
-      window.localStorage.setItem(savedDataKey, JSON.stringify({ sessions, friends, folders, libraryMaterials, focusRecords }));
-    } catch (error) {
-      console.error("Unable to save FOCURA dashboard data.", error);
-      window.setTimeout(() => {
-        setStorageError("Your changes could not be saved in this browser. Check available storage and try again.");
-      }, 0);
+    if (!accountId || loadedDataKey !== accountId) return;
+    if (skipRemoteSave.current) {
+      skipRemoteSave.current = false;
+      return;
     }
-  }, [folders, focusRecords, friends, libraryMaterials, loadedDataKey, savedDataKey, sessions]);
+
+    const timeoutId = window.setTimeout(() => {
+      void saveDashboard(accountId, { sessions, folders, libraryMaterials, focusRecords, isDark: theme === "dark" })
+        .then(() => setStorageError(""))
+        .catch((error: unknown) => {
+          console.error("Unable to save FOCURA data to Supabase.", error);
+          setStorageError("Your changes could not be synced. Check your connection and Supabase setup.");
+        });
+    }, 350);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [accountId, focusRecords, folders, theme, libraryMaterials, loadedDataKey, sessions]);
 
   useEffect(() => {
     if (!isRunning || !endTime) return;
@@ -357,26 +318,19 @@ export default function FocuraApp() {
     ));
   };
 
-  const toggleTheme = () => {
-    const nextTheme = !isDark;
-    setIsDark(nextTheme);
-    try {
-      window.localStorage.setItem("focura-theme", nextTheme ? "dark" : "light");
-      setStorageError("");
-    } catch (error) {
-      console.error("Unable to save the selected theme.", error);
-      setStorageError("Theme preference could not be saved in this browser.");
-    }
-  };
-
   const goToFocus = () => {
     document.getElementById("focus-timer")?.scrollIntoView({ behavior: "smooth", block: "center" });
     if (!isRunning) startFocus();
   };
 
-  const handleLogout = () => {
-    logout();
-    router.replace("/auth");
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.replace("/auth");
+    } catch (error) {
+      console.error("Unable to sign out of FOCURA.", error);
+      setStorageError("You could not be signed out. Please try again.");
+    }
   };
 
   const openSessionModal = (session?: StudySession) => {
@@ -430,31 +384,30 @@ export default function FocuraApp() {
     setSessionMinutes(25);
   };
 
-  const handleInviteFriend = (event: FormEvent) => {
+  const handleInviteFriend = async (event: FormEvent) => {
     event.preventDefault();
 
-    const trimmedName = friendName.trim();
     const trimmedEmail = friendEmail.trim();
-    if (!trimmedName || !trimmedEmail) return;
+    if (!trimmedEmail || !user) return;
 
-    const invitationCode = crypto.randomUUID();
-    const parameters = new URLSearchParams({
-      invite: invitationCode,
-      from: user?.name ?? "A FOCURA student",
-      email: trimmedEmail,
-    });
-    setInviteLink(`${window.location.origin}/auth?${parameters.toString()}`);
     setInviteError("");
-    setInviteNotice("Your invitation link is ready to share.");
-    setFriends((current) => current.some((friend) => friend.email.toLowerCase() === trimmedEmail.toLowerCase())
-      ? current
-      : [{
-          id: Date.now(),
-          name: trimmedName,
-          email: trimmedEmail,
-          scores: [],
-          materials: [],
-        }, ...current]);
+    setIsCreatingInvite(true);
+    try {
+      const invite = await createFriendInvite(user.id, user.name, trimmedEmail.toLowerCase());
+      const parameters = new URLSearchParams({
+        invite: invite.invite_token,
+        from: user.name,
+        email: trimmedEmail,
+      });
+      setInviteLink(`${window.location.origin}/auth?${parameters.toString()}`);
+      setInviteNotice("Invitation saved. Copy the link to share it.");
+      setFriendInvites((current) => [invite, ...current.filter((item) => item.id !== invite.id)]);
+    } catch (error) {
+      console.error("Unable to create the FOCURA friend invitation.", error);
+      setInviteError("Invitation could not be saved. Check your connection and Supabase setup, then try again.");
+    } finally {
+      setIsCreatingInvite(false);
+    }
   };
 
   const copyInviteLink = async () => {
@@ -467,17 +420,6 @@ export default function FocuraApp() {
       console.error("Unable to copy the FOCURA invitation link.", error);
       setInviteError("The link could not be copied. Select and copy it from the field below.");
     }
-  };
-
-  const openFriendDetails = (friend: FriendProfile) => {
-    setSelectedFriend(friend);
-    setShowFriendModal(true);
-    setExamName("");
-    setExamScore("");
-    setExamOutOf("100");
-    setScoreError("");
-    setMaterialTitle("");
-    setMaterialUrl("");
   };
 
   const handleCreateFolder = (event: FormEvent) => {
@@ -552,15 +494,16 @@ export default function FocuraApp() {
     };
 
     try {
-      await saveMaterialFile(String(material.id), file);
-      setLibraryMaterials((current) => [material, ...current]);
+      if (!user) throw new Error("Sign in before uploading a study material.");
+      const storagePath = await saveMaterialFile(user.id, file);
+      setLibraryMaterials((current) => [{ ...material, storagePath }, ...current]);
       setLibraryTitleDraft("");
       setMaterialError("");
       setShowLibraryMaterialModal(false);
       form.reset();
     } catch (error) {
       console.error("Unable to save uploaded study material.", error);
-      setMaterialError("Could not save the file in this browser. Check available storage and try again.");
+      setMaterialError("Could not upload the file to your account. Check your connection and storage setup, then try again.");
     }
   };
 
@@ -571,11 +514,8 @@ export default function FocuraApp() {
     }
 
     try {
-      const file = await getMaterialFile(String(material.id));
-      if (!file) {
-        setMaterialError("This file is no longer available in this browser. Upload it again to restore access.");
-        return;
-      }
+      if (!material.storagePath) throw new Error("This upload is missing its cloud storage path.");
+      const file = await loadMaterialFile(material.storagePath);
 
       const objectUrl = URL.createObjectURL(file);
       const anchor = document.createElement("a");
@@ -593,7 +533,8 @@ export default function FocuraApp() {
   const handleDeleteLibraryMaterial = async (material: LibraryMaterial) => {
     if (material.kind === "file") {
       try {
-        await removeMaterialFile(String(material.id));
+        if (!material.storagePath) throw new Error("This upload is missing its cloud storage path.");
+        await removeMaterialFile(material.storagePath);
       } catch (error) {
         console.error("Unable to delete uploaded study material.", error);
         setMaterialError("Could not remove this file. Try again.");
@@ -611,60 +552,8 @@ export default function FocuraApp() {
     return matchesFolder && matchesSearch;
   });
 
-  const handleAddScore = (event: FormEvent) => {
-    event.preventDefault();
-    if (!selectedFriend) return;
-
-    const score = Number(examScore);
-    const outOf = Number(examOutOf);
-    const exam = examName.trim();
-    if (!exam || !Number.isFinite(score) || !Number.isFinite(outOf) || outOf <= 0 || score < 0) {
-      setScoreError("Enter a valid exam name and score.");
-      return;
-    }
-    if (score > outOf) {
-      setScoreError("Score cannot be higher than the maximum score.");
-      return;
-    }
-
-    const updatedFriend = {
-      ...selectedFriend,
-      scores: [{ id: Date.now(), exam, score, outOf, date: new Date().toISOString().slice(0, 10) }, ...selectedFriend.scores],
-    };
-    setSelectedFriend(updatedFriend);
-    setFriends((current) => current.map((friend) => (friend.id === updatedFriend.id ? updatedFriend : friend)));
-    setExamName("");
-    setExamScore("");
-    setExamOutOf("100");
-    setScoreError("");
-  };
-
-  const handleAddMaterial = (event: FormEvent) => {
-    event.preventDefault();
-    if (!selectedFriend) return;
-
-    const title = materialTitle.trim();
-    const url = materialUrl.trim();
-    try {
-      const parsedUrl = new URL(url);
-      if (!title || !["http:", "https:"].includes(parsedUrl.protocol)) return;
-    } catch {
-      return;
-    }
-
-    const updatedFriend = {
-      ...selectedFriend,
-      materials: [{ id: Date.now(), title, url }, ...selectedFriend.materials],
-    };
-    setSelectedFriend(updatedFriend);
-    setFriends((current) => current.map((friend) => (friend.id === updatedFriend.id ? updatedFriend : friend)));
-    setMaterialTitle("");
-    setMaterialUrl("");
-  };
-
   return (
-    <div className={isDark ? "dark" : ""}>
-      <div className="min-h-screen bg-[var(--background)] text-[var(--text-primary)] transition-colors duration-200 lg:pl-64">
+    <div className="min-h-screen bg-[var(--background)] text-[var(--text-primary)] transition-colors duration-200 lg:pl-64">
         {showFolderModal ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm">
             <div className="w-full max-w-md rounded-[28px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[var(--shadow)]">
@@ -798,7 +687,6 @@ export default function FocuraApp() {
                   setInviteLink("");
                   setInviteError("");
                   setInviteNotice("");
-                  setFriendName("");
                   setFriendEmail("");
                 }} className="text-sm text-[var(--text-secondary)]">Close</button>
               </div>
@@ -807,16 +695,6 @@ export default function FocuraApp() {
                 Create a personal signup link you can send through email, messaging apps, or any other channel.
               </p>
               {!inviteLink ? <form onSubmit={handleInviteFriend} className="mt-5 space-y-4">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Friend name</label>
-                  <input
-                    value={friendName}
-                    onChange={(event) => setFriendName(event.target.value)}
-                    placeholder="Alex Morgan"
-                    className="w-full rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)] px-3 py-3 text-sm text-[var(--text-primary)] outline-none ring-0 placeholder:text-[var(--text-secondary)]"
-                  />
-                </div>
-
                 <div>
                   <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Email</label>
                   <input
@@ -830,8 +708,9 @@ export default function FocuraApp() {
 
                 <div className="flex justify-end gap-3 pt-2">
                   <Button type="button" variant="secondary" onClick={() => setShowInviteModal(false)}>Cancel</Button>
-                  <Button type="submit">Create invite link</Button>
+                  <Button type="submit" disabled={isCreatingInvite}>{isCreatingInvite ? "Saving invite..." : "Create invite link"}</Button>
                 </div>
+                {inviteError ? <p role="alert" className="text-sm text-red-600">{inviteError}</p> : null}
               </form> : (
                 <div className="mt-5 space-y-4">
                   <label className="block">
@@ -844,13 +723,12 @@ export default function FocuraApp() {
                     <Button type="button" variant="secondary" onClick={() => {
                       setInviteLink("");
                       setInviteNotice("");
-                      setFriendName("");
                       setFriendEmail("");
                     }}>Create another</Button>
                     <Button type="button" onClick={() => void copyInviteLink()}>Copy link</Button>
                   </div>
                   <p className="text-xs leading-5 text-[var(--text-secondary)]">
-                    This link opens FOCURA signup with the invite details. Friend data is still stored in this browser until shared accounts are configured.
+                    Your invitation and its status are saved to your account and update when your friend accepts.
                   </p>
                 </div>
               )}
@@ -858,75 +736,6 @@ export default function FocuraApp() {
           </div>
         ) : null}
 
-        {showFriendModal && selectedFriend ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm">
-            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-[28px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[var(--shadow)]">
-              <div className="flex items-center justify-between">
-                <h3 className="text-2xl font-semibold tracking-tight">{selectedFriend.name}</h3>
-                <button type="button" onClick={() => setShowFriendModal(false)} className="text-sm text-[var(--text-secondary)]">Close</button>
-              </div>
-              <p className="mt-1 text-sm text-[var(--text-secondary)]">{selectedFriend.email} · Invite pending</p>
-
-              <div className="mt-5 space-y-4">
-                <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
-                  <h4 className="font-semibold">Exam scores</h4>
-                  <p className="mt-1 text-sm text-[var(--text-secondary)]">Add score details you and your friend agree to track.</p>
-                  {selectedFriend.scores.length > 0 ? (
-                    <div className="mt-3 space-y-2">
-                      {selectedFriend.scores.map((score) => (
-                        <div key={score.id} className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                          <div>
-                            <div className="font-medium">{score.exam}</div>
-                            <div className="text-xs text-[var(--text-secondary)]">{score.date}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-semibold">{score.score} / {score.outOf}</div>
-                            <div className="text-xs text-[var(--text-secondary)]">{Math.round((score.score / score.outOf) * 100)}%</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-3 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-secondary)]">
-                      No exam scores have been added.
-                    </div>
-                  )}
-                  <form onSubmit={handleAddScore} className="mt-4 grid gap-3 sm:grid-cols-4">
-                    <input aria-label="Exam name" value={examName} onChange={(event) => setExamName(event.target.value)} placeholder="Exam name" required className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" />
-                    <input aria-label="Score" type="number" min="0" step="any" value={examScore} onChange={(event) => setExamScore(event.target.value)} placeholder="Score" required className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" />
-                    <input aria-label="Maximum score" type="number" min="0.01" step="any" value={examOutOf} onChange={(event) => setExamOutOf(event.target.value)} placeholder="Out of" required className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" />
-                    <Button type="submit">Add score</Button>
-                  </form>
-                  {scoreError ? <p role="alert" className="mt-2 text-sm text-red-600">{scoreError}</p> : null}
-                </div>
-
-                <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
-                  <h4 className="font-semibold">Study materials</h4>
-                  <p className="mt-1 text-sm text-[var(--text-secondary)]">Share links to notes, documents, or learning resources.</p>
-                  <div className="mt-3 space-y-2 text-sm text-[var(--text-primary)]">
-                    {selectedFriend.materials.length > 0 ? (
-                      selectedFriend.materials.map((material) => (
-                        <div key={material.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                          <a href={material.url} target="_blank" rel="noreferrer" className="font-medium text-[var(--brand-primary)] hover:underline">{material.title}</a>
-                          <div className="break-all text-xs text-[var(--text-secondary)]">{material.url}</div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text-secondary)]">
-                        No materials shared yet.
-                      </div>
-                    )}
-                  </div>
-                  <form onSubmit={handleAddMaterial} className="mt-4 grid gap-3 sm:grid-cols-[1fr_2fr_auto]">
-                    <input aria-label="Material title" value={materialTitle} onChange={(event) => setMaterialTitle(event.target.value)} placeholder="Material title" required className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" />
-                    <input aria-label="Material link" type="url" value={materialUrl} onChange={(event) => setMaterialUrl(event.target.value)} placeholder="https://..." required className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" />
-                    <Button type="submit">Add link</Button>
-                  </form>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : null}
         <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-[var(--border)] bg-[var(--surface-elevated)] px-5 py-6 lg:flex">
           <Link href="/navigation" className="mb-8 flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--brand-primary)] text-lg font-bold text-white">F</span>
@@ -1047,7 +856,7 @@ export default function FocuraApp() {
 
             <div className="flex items-center gap-3">
               <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="Toggle theme">
-                {isDark ? <SunIcon /> : <Moon size={18} />}
+                {theme === "dark" ? <Sun size={18} className="text-[var(--brand-primary)]" /> : <Moon size={18} />}
               </Button>
               <span className="hidden max-w-32 truncate text-sm text-[var(--text-secondary)] sm:block">{user?.name ?? "Student"}</span>
               <Button variant="secondary" onClick={handleLogout}>Log out</Button>
@@ -1057,8 +866,10 @@ export default function FocuraApp() {
         </header>
 
         <main className="mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-6 lg:px-8">
-          <div className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--text-secondary)]">
-            Plans, pending invitations, score records, and material links are saved only in this browser for your account. They are not yet synced or visible to friends; connect a Supabase project to enable real shared accounts and data.
+          <div className={`mb-6 rounded-2xl border p-4 text-sm ${loadedDataKey === accountId && accountId ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+            {loadedDataKey === accountId && accountId
+              ? "Connected. Your plans, focus history, folders, and study links sync to your account and update in real time across signed-in devices."
+              : "Connecting to your Supabase account to load live study data..."}
           </div>
           {storageError ? (
             <div role="alert" className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -1439,28 +1250,33 @@ export default function FocuraApp() {
               </div>
 
               <div className="mt-6 space-y-4">
-                {friends.length > 0 ? (
-                  friends.map((buddy) => (
-                    <div key={buddy.id} className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3">
-                      <button type="button" onClick={() => openFriendDetails(buddy)} className="flex flex-1 items-center justify-between gap-3 text-left">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--brand-primary)]/10 text-sm font-semibold text-[var(--brand-primary)]">
-                            {buddy.name.slice(0, 2)}
+                {friendInvites.length > 0 ? (
+                  friendInvites.map((invite) => {
+                    const sentByMe = invite.inviter_id === accountId;
+                    return (
+                      <div key={invite.id} className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--brand-primary)]/10 text-sm font-semibold text-[var(--brand-primary)]">
+                            {(sentByMe ? invite.invitee_email : invite.inviter_name).slice(0, 2).toUpperCase()}
                           </div>
-                          <div>
-                            <div className="font-medium">{buddy.name}</div>
-                            <div className="text-sm text-[var(--text-secondary)]">{buddy.email} · Invite pending</div>
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">
+                              {sentByMe ? invite.invitee_email : invite.inviter_name}
+                            </div>
+                            <div className="text-sm text-[var(--text-secondary)]">
+                              {sentByMe ? "Sent invite" : "Invited you"} · {new Date(invite.created_at).toLocaleDateString()}
+                            </div>
                           </div>
                         </div>
-                        <div className="text-sm font-medium text-[var(--text-primary)]">
-                          {buddy.scores.length} score{buddy.scores.length === 1 ? "" : "s"} · {buddy.materials.length} link{buddy.materials.length === 1 ? "" : "s"}
+                        <div className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${invite.status === "accepted" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                          {invite.status === "accepted" ? "Connected" : "Pending"}
                         </div>
-                      </button>
-                    </div>
-                  ))
+                      </div>
+                    );
+                  })
                 ) : (
                   <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)] p-5 text-sm text-[var(--text-secondary)]">
-                    Your study circle is empty. Invite a friend when you are ready.
+                    No friends or invitations yet. Invite a friend to connect your study circle.
                   </div>
                 )}
               </div>
@@ -1501,11 +1317,6 @@ export default function FocuraApp() {
             </div>
           </section>
         </main>
-      </div>
     </div>
   );
-}
-
-function SunIcon() {
-  return <Sparkles size={18} className="text-[var(--text-primary)]" />;
 }

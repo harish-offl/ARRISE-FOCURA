@@ -19,6 +19,7 @@ export const metadata: Metadata = {
 };
 
 import { AuthProvider } from "@/components/auth-provider";
+import { ThemeProvider } from "@/components/theme-provider";
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
@@ -27,8 +28,34 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (() => {
+                const THEME_STORAGE_KEY = "arrise-theme-preference";
+                const THEME_ATTRIBUTE = "data-theme";
+                function getTheme() {
+                  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+                  if (stored === "dark" || stored === "light") return stored;
+                  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+                }
+                function applyTheme(theme) {
+                  document.documentElement.classList.remove("light", "dark");
+                  document.documentElement.classList.add(theme);
+                  document.documentElement.setAttribute(THEME_ATTRIBUTE, theme);
+                }
+                const theme = getTheme();
+                applyTheme(theme);
+              })();
+            `,
+          }}
+        />
+      </head>
       <body className="min-h-full bg-[var(--background)] text-[var(--text-primary)]">
-        <AuthProvider>{children}</AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
